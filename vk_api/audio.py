@@ -119,12 +119,12 @@ class VkAudio(object):
                     'You don\'t have permissions to browse user\'s audio'
                 )
 
-            tracks = scrap_data(
+            tracks = scrap_data_iter(
                 response.text,
                 self.user_id,
                 filter_root_el={'class_': 'audioPlaylist__list'} if album_id else None,
-                convert_m3u8_links=self.convert_m3u8_links,
-                http=self._vk.http
+                #convert_m3u8_links=self.convert_m3u8_links,
+                #http=self._vk.http
             )
 
             if not tracks:
@@ -422,3 +422,47 @@ def scrap_albums(html):
         })
 
     return albums
+
+def scrap_data_iter(html, user_id, filter_root_el=None, convert_m3u8_links=True):
+    """ Парсинг списка аудиозаписей из html страницы """
+
+    if filter_root_el is None:
+        filter_root_el = {'id': 'au_search_items'}
+
+    soup = BeautifulSoup(html, 'html.parser')
+    tracks = []
+
+    root_el = soup.find(**filter_root_el)
+
+    if root_el is None:
+        raise ValueError('Could not find root el for audio')
+
+    for audio in root_el.find_all('div', {'class': 'audio_item'}):
+        if 'audio_item_disabled' in audio['class']:
+            continue
+
+        artist = audio.select_one('.ai_artist').text
+        title = audio.select_one('.ai_title').text
+        duration = int(audio.select_one('.ai_dur')['data-dur'])
+        full_id = tuple(
+            int(i) for i in audio['data-id'].split('_')
+        )
+        link = audio.select_one('.ai_body').input['value']
+
+        if 'audio_api_unavailable' in link:
+            link = decode_audio_url(link, user_id)
+
+        if convert_m3u8_links and 'm3u8' in link:
+            link = RE_M3U8_TO_MP3.sub(r'\1/\2.mp3', link)
+
+        tracks.append({
+            'id': full_id[1],
+            'owner_id': full_id[0],
+            'url': link,
+
+            'artist': artist,
+            'title': title,
+            'duration': duration,
+        })
+
+    return tracks
