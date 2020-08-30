@@ -129,7 +129,7 @@ class VkAudio(object):
                 response['data'][0]['list']
             )
 
-            tracks = scrap_tracks(
+            tracks = scrap_data_iter(
                 ids,
                 self.user_id,
                 self._vk.http,
@@ -680,46 +680,45 @@ def scrap_albums(html):
 
     return albums
 
-def scrap_data_iter(html, user_id, filter_root_el=None, convert_m3u8_links=True):
-    """ Парсинг списка аудиозаписей из html страницы """
+def scrap_data_iter(ids, user_id, http, convert_m3u8_links=True):
 
-    if filter_root_el is None:
-        filter_root_el = {'id': 'au_search_items'}
+    last_request = 0.0
 
-    soup = BeautifulSoup(html, 'html.parser')
-    tracks = []
+    for ids_group in [ids[i:i + 10] for i in range(0, len(ids), 10)]:
+        delay = RPS_DELAY_RELOAD_AUDIO - (time.time() - last_request)
 
-    root_el = soup.find(**filter_root_el)
+        if delay > 0:
+            time.sleep(delay)
 
-    if root_el is None:
-        raise ValueError('Could not find root el for audio')
+        result = http.post(
+            'https://m.vk.com/audio',
+            data={'act': 'reload_audio', 'ids': ','.join(['_'.join(i) for i in ids_group])}
+        ).json()
 
-    for audio in root_el.find_all('div', {'class': 'audio_item'}):
-        if 'audio_item_disabled' in audio['class']:
-            continue
+        last_request = time.time()
+        if result['data']:
+            data_audio = result['data'][0]
+            for audio in data_audio:
+                artist = BeautifulSoup(audio[4], 'html.parser').text
+                title = BeautifulSoup(audio[3].strip(), 'html.parser').text
+                duration = audio[5]
+                link = audio[2]
 
-        artist = audio.select_one('.ai_artist').text
-        title = audio.select_one('.ai_title').text
-        duration = int(audio.select_one('.ai_dur')['data-dur'])
-        full_id = tuple(
-            int(i) for i in audio['data-id'].split('_')
-        )
-        link = audio.select_one('.ai_body').input['value']
+                if 'audio_api_unavailable' in link:
+                    link = decode_audio_url(link, user_id)
 
-        if 'audio_api_unavailable' in link:
-            link = decode_audio_url(link, user_id)
+                if convert_m3u8_links and 'm3u8' in link:
+                    link = RE_M3U8_TO_MP3.sub(r'\1/\2.mp3', link)
 
-        if convert_m3u8_links and 'm3u8' in link:
-            link = RE_M3U8_TO_MP3.sub(r'\1/\2.mp3', link)
+                yield {
+                    'id': audio[0],
+                    'owner_id': audio[1],
+                    'track_covers': audio[14].split(',') if audio[14] else [],
+                    'url': link,
 
-        tracks.append({
-            'id': full_id[1],
-            'owner_id': full_id[0],
-            'url': link,
+                    'artist': artist,
+                    'title': title,
+                    'duration': duration,
+                }
 
-            'artist': artist,
-            'title': title,
-            'duration': duration,
-        })
 
-    return tracks
